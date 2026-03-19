@@ -1,130 +1,144 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from .schemas import PPTRequest, PPTContent, Slide
-from .services.llm import generate_ppt_content, polish_topic
+from pydantic import BaseModel
+from typing import Optional, List, Any
+import os
+import uuid
+import time
+
+from .schemas import PPTContent, ModifyOutlineRequest
+from .services.llm import generate_ppt_content, polish_topic, modify_ppt_content
 from .services.ppt import create_pptx
 from .services.html_export import create_html_presentation
-from .services import history as history_service
-import os
-import uvicorn
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from .services.history import add_history_item, get_all_history, delete_history_item
 
 app = FastAPI(title="GenPPT API")
 
-# CORS
+# Add request logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    print(f"--- Incoming Request: {request.method} {request.url.path} ---")
+    response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
+    print(f"--- Finished Request: {request.method} {request.url.path} (Status: {response.status_code}, Time: {process_time:.2f}ms) ---")
+    return response
+
+# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
-# Static Files for Downloads
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-generated_dir = os.path.join(BASE_DIR, "generated_ppts")
-os.makedirs(generated_dir, exist_ok=True)
-app.mount("/downloads", StaticFiles(directory=generated_dir), name="downloads")
+# Ensure the generated_ppts directory exists
+GENERATED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "generated_ppts")
+os.makedirs(GENERATED_DIR, exist_ok=True)
 
-@app.get("/get-file/{filename}")
-async def get_file(filename: str):
-    """
-    Forces download of a file by setting Content-Disposition.
-    """
-    file_path = os.path.join(generated_dir, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="File not found")
-    
-    # Setting filename in FileResponse sets Content-Disposition: attachment
-    return FileResponse(
-        file_path, 
-        filename=filename, 
-        media_type='application/octet-stream'
-    )
+class TopicRequest(BaseModel):
+    topic: str
+    provider: str = "openai"
+    api_key: Optional[str] = None
 
-@app.get("/")
-async def root():
-    logger.info("Root endpoint accessed")
-    return {"message": "GenPPT API is running"}
-
-@app.post("/polish")
-async def polish(request: PPTRequest):
-    """
-    Polishes the topic for better results.
-    """
-    logger.info(f"Received /polish request for topic: {request.topic}")
-    try:
-        polished = polish_topic(request.topic, request.provider, request.api_key)
-        return {"polished_topic": polished}
-    except Exception as e:
-        logger.error(f"Error in /polish: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/generate", response_model=PPTContent)
-async def generate_preview(request: PPTRequest):
-    """
-    Generates PPT content (JSON) for preview based on the topic.
-    """
-    logger.info(f"Received /generate request: topic='{request.topic}', provider='{request.provider}'")
+@app.post("/generate")
+async def generate_ppt(request: TopicRequest):
     try:
         content = generate_ppt_content(request.topic, request.provider, request.api_key)
         
-        # Automatically generate files and add to history
+        # Pre-generate both files and save to history
         pptx_filename = create_pptx(content)
         html_filename = create_html_presentation(content)
         
-        history_service.add_history_item(
+        # Save to history
+        add_history_item(
             title=content.title,
             content=content,
             pptx_filename=pptx_filename,
             html_filename=html_filename
         )
         
-        logger.info("Successfully generated PPT content and added to history")
         return content
     except Exception as e:
-        logger.error(f"Error in /generate: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/polish")
+async def polish(request: TopicRequest):
+    try:
+        polished = polish_topic(request.topic, request.provider, request.api_key)
+        return {"polished_topic": polished}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/modify-outline")
+async def modify_outline(request: ModifyOutlineRequest):
+    try:
+        updated_content_dict = modify_ppt_content(
+            current_content=request.content.dict(),
+            instruction=request.instruction,
+            provider=request.provider,
+            api_key=request.api_key
+        )
+        # Ensure we return a valid PPTContent object to avoid validation errors
+        return PPTContent(**updated_content_dict)
+    except Exception as e:
+        import traceback
+        print("Error in /modify-outline:")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/history")
 async def get_history():
-    return history_service.get_all_history()
+    return get_all_history()
 
 @app.delete("/history/{item_id}")
 async def delete_history(item_id: str):
-    history_service.delete_history_item(item_id)
+    delete_history_item(item_id)
     return {"status": "success"}
 
 @app.post("/download")
-async def generate_file(content: PPTContent, background_tasks: BackgroundTasks):
-    """
-    Generates the physical PPTX file from the JSON content and returns the download URL.
-    """
+async def download_pptx(content: PPTContent):
     try:
         filename = create_pptx(content)
-        download_url = f"/downloads/{filename}"
-        return {"download_url": download_url, "filename": filename}
+        return {
+            "filename": filename,
+            "download_url": f"/get-file/{filename}"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/download-html")
-async def generate_html_file(content: PPTContent):
-    """
-    Generates a standalone HTML file from the JSON content.
-    """
+async def download_html(content: PPTContent):
     try:
         filename = create_html_presentation(content)
-        download_url = f"/downloads/{filename}"
-        return {"download_url": download_url, "filename": filename}
+        return {
+            "filename": filename,
+            "download_url": f"/get-file/{filename}"
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/get-file/{filename}")
+async def get_file(filename: str, mode: Optional[str] = "preview"):
+    file_path = os.path.join(GENERATED_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    # If mode is download, we want it to be downloaded (attachment)
+    # If mode is preview and it's HTML, we want it to open in the browser (inline)
+    if mode == "download":
+        content_disposition = "attachment"
+    else:
+        content_disposition = "inline" if filename.endswith(".html") else "attachment"
+    
+    return FileResponse(
+        file_path, 
+        filename=filename if content_disposition == "attachment" else None,
+        media_type="text/html" if filename.endswith(".html") else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+
 if __name__ == "__main__":
-    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

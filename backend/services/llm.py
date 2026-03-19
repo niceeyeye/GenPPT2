@@ -36,8 +36,14 @@ def get_client_and_model(provider: str, api_key: str = None):
     elif provider == "doubao":
         key = api_key or os.getenv("DOUBAO_API_KEY")
         base_url = os.getenv("DOUBAO_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
-        model = os.getenv("DOUBAO_MODEL") # e.g., ep-xxxx
-        if not key: return None, None
+        model = os.getenv("DOUBAO_MODEL")
+        print(f"Debug: Doubao Config - Key: {'set' if key else 'not set'}, Model: {model}, URL: {base_url}")
+        if not key: 
+            print("Error: Doubao API Key is missing.")
+            return None, None
+        if not model:
+            print("Error: Doubao Model (Endpoint ID) is missing.")
+            return None, None
         return OpenAI(api_key=key, base_url=base_url), model
 
     # 3. Qwen (DashScope)
@@ -134,33 +140,46 @@ def generate_ppt_content(topic: str, provider: str = "openai", api_key: str = No
     print(f"Calling {provider} API with model {model} for topic: {topic}...")
     
     prompt = f"""
-    你是一位享誉全球的 PPT 设计大师和文案专家。请根据用户主题：'{topic}'，生成一份极具视觉冲击力和专业度的 PPT JSON 数据。
+    你是一位顶级的 PPT 设计大师和内容架构师，擅长制作具有苹果发布会风格（Vibe）的现代演示文稿。请根据用户主题：'{topic}'，生成一份深度结构化的 PPT JSON 数据。
     
-    ### 设计要求：
-    1. **配色方案**：根据主题选择一套高级的、符合行业特性的配色（例如：科技蓝、简约白、商务黑、活力橙等）。
-    2. **布局多样性**：每一页都要根据内容选择合适的 `layout_type`：
-       - `centered`: 适用于标题页或金句页。
-       - `bullet_points`: 适用于标准的要点陈述。
-       - `two_columns`: 适用于对比或左文右图。
-       - `title_only`: 适用于极简的视觉冲击页。
-    3. **内容润色**：将生硬的文字润色为更具说服力、更简洁的专业文案。
-    4. **页数**：生成 6-10 页幻灯片，包含：标题页、目录页（可选）、内容页、总结/结束页。
+    ### 核心内容设计逻辑 (借鉴 Banana Slides)：
+    1. **叙事性结构**：不要只是堆砌事实。按照“痛点引入 -> 解决方案 -> 核心价值 -> 未来展望”的逻辑线组织 slides。
+    2. **高信息密度卡片**：将复杂概念拆解为 3-4 个互补的卡片。每个卡片的 `title` 要有力（Action-oriented），`description` 要精炼且富有洞见。
+    3. **视觉层次感**：
+       - `title_only`：用于金句、关键转折点或大标题页。
+       - `cards`：用于并列的功能、特性或团队展示。
+       - `timeline`：用于演进历程、实施步骤或工作流。
+       - `content_list`：用于详细的清单或深度的理论拆解。
 
-    ### JSON 结构要求：
+    ### 视觉美学要求：
+    - **配色方案**：严禁使用老土的配色。根据主题选择如 `Midnight Navy & Electric Cyan`、`Minimal White & Cyber Orange` 等现代配色。
+    - **背景风格**：`bg_style` 必须精准匹配主题调性（`gradient`, `solid`, `mesh`）。
+
+    ### JSON 结构严格要求：
     {{
-        "title": "PPT总体标题",
-        "theme_color": "十六进制颜色代码",
-        "accent_color": "十六进制辅助颜色代码",
+        "title": "润色后的高冲击力主标题",
+        "subtitle": "副标题，体现演示文稿的核心价值主张",
+        "theme_color": "主色调（Hex格式）",
+        "accent_color": "强调色（Hex格式）",
+        "bg_style": "gradient | solid | mesh",
         "slides": [
             {{
-                "page_title": "页面标题",
-                "content": ["润色后的核心要点1", "要点2", "..."],
-                "layout_type": "centered | bullet_points | two_columns | title_only",
-                "image_description": "极其详尽的、适合 Midjourney 或 DALL-E 风格的配图提示词"
+                "page_title": "极简且有力的页面标题",
+                "subtitle": "可选的页面金句或逻辑补充",
+                "layout_type": "cards | timeline | title_only | content_list",
+                "content": [
+                    {{
+                        "title": "要点标题（动词开头为佳）",
+                        "description": "高度概括的内容，避免废话"
+                    }}
+                ]
             }}
         ]
     }}
-    请只输出合法的 JSON 内容，不要包含任何多余文字。
+    
+    ### 质量控制：
+    - 生成 6-10 页，确保每一页在逻辑上都是下一页的基石。
+    - 严禁输出 Markdown 代码块标签，只返回纯 JSON。
     """
 
     try:
@@ -203,21 +222,110 @@ def generate_ppt_content(topic: str, provider: str = "openai", api_key: str = No
 
 def polish_topic(topic: str, provider: str = "openai", api_key: str = None) -> str:
     """
-    Polishes the topic and provides suggestions.
+    Polishes the topic using a professional designer's perspective.
     """
+    print(f"--- Polish Topic Start (Provider: {provider}) ---")
     client, model = get_client_and_model(provider, api_key)
     if not client or not model:
+        print("Error: No client or model found for polishing.")
         return topic # Fallback
 
-    prompt = f"作为一个 PPT 文案专家，请将以下 PPT 主题进行润色，使其更具吸引力和专业度。只需返回润色后的主题：'{topic}'"
+    print(f"Calling {provider} for polishing with model {model}...")
+    
+    prompt = f"""
+    作为一名专业的演示文稿（PPT）架构师和文案专家，请对用户提供的主题进行深度润色。
+    
+    ### 目标：
+    1. **吸引力**：使标题更具冲击力和吸引力，能够瞬间抓住听众注意力。
+    2. **专业度**：使用行业术语或更具深度的表达，提升整体格调。
+    3. **逻辑性**：确保标题隐含清晰的演示逻辑或核心价值主张。
+    
+    ### 润色原则：
+    - 保持简洁：不超过 20 个字。
+    - 针对性：根据主题性质（商业、技术、教育等）调整语调。
+    - 动作导向：尽量包含能够引发行动或思考的词汇。
+    
+    ### 待润色主题：
+    '{topic}'
+    
+    ### 仅返回润色后的最终标题文本，不要包含任何解释、引号或前缀。
+    """
 
     try:
         response = client.chat.completions.create(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=200
+            messages=[
+                {"role": "system", "content": "你是一位顶级 PPT 文案专家，只输出润色后的标题文本。"},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.8,
+            timeout=30.0 # Add a timeout to prevent hanging forever
         )
-        return response.choices[0].message.content.strip().strip("'\"")
-    except:
+        result = response.choices[0].message.content.strip().strip("'\"")
+        print(f"Polishing result: {result}")
+        return result
+    except Exception as e:
+        print(f"Error during polishing: {str(e)}")
         return topic
+
+
+def modify_ppt_content(current_content: dict, instruction: str, provider: str = "openai", api_key: str = None) -> dict:
+    """
+    Modifies an existing PPT content JSON based on user instruction.
+    """
+    client, model = get_client_and_model(provider, api_key)
+    if not client or not model:
+        raise ValueError("未检测到有效的 API Key 或模型配置。")
+
+    print(f"Calling {provider} API to modify outline with instruction: {instruction}")
+
+    prompt = f"""
+    你是一个专业的 PPT 架构师。下面是当前的 PPT 结构数据（JSON 格式）：
+    ```json
+    {json.dumps(current_content, ensure_ascii=False)}
+    ```
+    
+    用户的修改指令是："{instruction}"
+    
+    请严格按照用户的指令修改上述 JSON 数据。你可以增加、删除、修改 slides，或者调整主题颜色、布局等。
+    请保持原有的 JSON 结构完全不变（必须包含 title, subtitle, theme_color, accent_color, bg_style, slides 等字段）。
+    如果用户要求增加一页，请确保新页面的结构和原有页面一致（包含 page_title, subtitle, layout_type, content 数组）。
+    
+    严禁输出任何 Markdown 格式的包裹（如 ```json ），只能输出纯合法的 JSON 字符串。
+    """
+
+    try:
+        kwargs = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "你是一个只输出合法 JSON 字符串的 AI。"},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.5,
+            "timeout": 60.0
+        }
+        
+        # Enable json_object format for OpenAI and Gemini
+        if provider in ["openai", "gemini"]:
+            kwargs["response_format"] = { "type": "json_object" }
+            
+        response = client.chat.completions.create(**kwargs)
+        result_text = response.choices[0].message.content.strip()
+        
+        # Clean up potential markdown formatting if the model ignored instructions
+        if result_text.startswith("```json"):
+            result_text = result_text[7:]
+        if result_text.startswith("```"):
+            result_text = result_text[3:]
+        if result_text.endswith("```"):
+            result_text = result_text[:-3]
+            
+        return json.loads(result_text.strip())
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse modified JSON. Raw text: {result_text}")
+        raise ValueError("AI 返回的数据格式不正确，无法解析为 JSON。") from e
+    except Exception as e:
+        print(f"Error during modifying outline: {str(e)}")
+        raise ValueError(f"调用 AI 服务失败: {str(e)}") from e
 

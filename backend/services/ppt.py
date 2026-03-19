@@ -65,7 +65,7 @@ def create_pptx(content: PPTContent) -> str:
     for slide_data in content.slides:
         slide = prs.slides.add_slide(prs.slide_layouts[6]) # Blank layout
         
-        # Add a thick top border matching theme color (like the preview)
+        # Add a thick top border matching theme color
         top_border = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, Inches(0.1))
         top_border.fill.solid()
         top_border.fill.fore_color.rgb = main_color
@@ -80,38 +80,87 @@ def create_pptx(content: PPTContent) -> str:
         p.font.bold = True
         p.font.color.rgb = main_color
         
-        if slide_data.layout_type == 'centered':
-            p.alignment = PP_ALIGN.CENTER
-            content_box = slide.shapes.add_textbox(Inches(1.5), Inches(2), Inches(10.333), Inches(4))
-            ctf = content_box.text_frame
-            ctf.word_wrap = True
-            for point in slide_data.content:
-                cp = ctf.add_paragraph()
-                cp.text = point
-                cp.alignment = PP_ALIGN.CENTER
-                cp.font.size = Pt(24)
-                cp.space_before = Pt(10)
+        # Set subtitle if exists
+        if slide_data.subtitle:
+            sub_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.2), Inches(11.7), Inches(0.5))
+            stf = sub_box.text_frame
+            stf.text = slide_data.subtitle
+            sp = stf.paragraphs[0]
+            sp.font.size = Pt(18)
+            sp.font.color.rgb = RGBColor(120, 120, 120)
+            
+        l_type = (slide_data.layout_type or "").lower().replace("-", "_").replace(" ", "_")
         
-        elif slide_data.layout_type == 'two_columns':
-            # Left column: text
-            left_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.8), Inches(5.5), Inches(4.5))
-            ltf = left_box.text_frame
-            ltf.word_wrap = True
-            for point in slide_data.content:
-                lp = ltf.add_paragraph()
-                lp.text = f"• {point}"
-                lp.font.size = Pt(20)
-                lp.space_before = Pt(10)
+        # Check if content is effectively empty
+        is_empty_content = False
+        if not slide_data.content or len(slide_data.content) == 0:
+            is_empty_content = True
+        elif len(slide_data.content) == 1:
+            item = slide_data.content[0]
+            # Handle dictionary
+            if isinstance(item, dict):
+                if not item.get("title", "") and not item.get("description", ""):
+                    is_empty_content = True
+            # Handle Pydantic model / object
+            elif hasattr(item, "title"):
+                if not getattr(item, "title", "") and not getattr(item, "description", ""):
+                    is_empty_content = True
+            # Handle string
+            elif isinstance(item, str) and not item.strip():
+                is_empty_content = True
+                
+        is_title_only = "title" in l_type or l_type == "cover" or is_empty_content
+        is_two_columns = "two" in l_type or "column" in l_type
+        is_timeline = "time" in l_type or "step" in l_type
+        
+        if is_title_only:
+            # Reposition title to center
+            title_box.top = Inches(3)
+            p.alignment = PP_ALIGN.CENTER
+            p.font.size = Pt(54)
+            if slide_data.subtitle:
+                sub_box.top = Inches(4.5)
+                sp.alignment = PP_ALIGN.CENTER
+                sp.font.size = Pt(24)
+        
+        elif is_two_columns:
+            # Left column: text cards
+            left_top = 2.0
+            for item in slide_data.content:
+                title = item.title if hasattr(item, "title") else (item.get("title", "") if isinstance(item, dict) else str(item))
+                desc = item.description if hasattr(item, "description") else (item.get("description", "") if isinstance(item, dict) else "")
+                
+                if not title and not desc: continue
+                
+                # Card background
+                card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.8), Inches(left_top), Inches(5.5), Inches(1.2))
+                card.fill.solid()
+                card.fill.fore_color.rgb = RGBColor(250, 250, 250)
+                card.line.color.rgb = main_color
+                card.line.width = Pt(2)
+                
+                tf = card.text_frame
+                p1 = tf.paragraphs[0]
+                p1.text = title
+                p1.font.bold = True
+                p1.font.size = Pt(18)
+                p1.font.color.rgb = RGBColor(50, 50, 50)
+                
+                p2 = tf.add_paragraph()
+                p2.text = desc
+                p2.font.size = Pt(14)
+                p2.font.color.rgb = RGBColor(100, 100, 100)
+                
+                left_top += 1.4
             
             # Right column: visual placeholder
-            right_rect = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(7), Inches(1.8), Inches(5.5), Inches(4.5))
+            right_rect = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(7), Inches(2.0), Inches(5.5), Inches(4.5))
             right_rect.fill.solid()
             right_rect.fill.fore_color.rgb = RGBColor(245, 245, 245)
             right_rect.line.color.rgb = RGBColor(220, 220, 220)
-            right_rect.line.width = Pt(1)
             
             if slide_data.image_description:
-                img_text_box = slide.shapes.add_textbox(Inches(7.2), Inches(2.5), Inches(5.1), Inches(3))
+                img_text_box = slide.shapes.add_textbox(Inches(7.2), Inches(3.5), Inches(5.1), Inches(2))
                 itf = img_text_box.text_frame
                 itf.word_wrap = True
                 itf.text = f"[Visual Placeholder]\n{slide_data.image_description}"
@@ -121,19 +170,79 @@ def create_pptx(content: PPTContent) -> str:
                 ip.font.italic = True
                 ip.font.color.rgb = RGBColor(150, 150, 150)
 
-        else: # Default bullet points
-            content_box = slide.shapes.add_textbox(Inches(0.8), Inches(1.8), Inches(11.7), Inches(4.5))
-            ctf = content_box.text_frame
-            ctf.word_wrap = True
-            for point in slide_data.content:
-                cp = ctf.add_paragraph()
-                cp.text = f"• {point}"
-                cp.font.size = Pt(22)
-                cp.space_before = Pt(12)
-                cp.font.color.rgb = RGBColor(60, 60, 60)
+        elif is_timeline:
+            top_pos = 2.0
+            for idx, item in enumerate(slide_data.content):
+                title = item.title if hasattr(item, "title") else (item.get("title", "") if isinstance(item, dict) else str(item))
+                desc = item.description if hasattr(item, "description") else (item.get("description", "") if isinstance(item, dict) else "")
+                
+                if not title and not desc: continue
+                
+                # Circle number
+                circle = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(0.8), Inches(top_pos), Inches(0.5), Inches(0.5))
+                circle.fill.solid()
+                circle.fill.fore_color.rgb = acc_color
+                circle.line.visible = False
+                circle.text_frame.text = str(idx + 1)
+                circle.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+                
+                # Content
+                tf_box = slide.shapes.add_textbox(Inches(1.5), Inches(top_pos - 0.1), Inches(10), Inches(0.8))
+                tf = tf_box.text_frame
+                p1 = tf.paragraphs[0]
+                p1.text = title
+                p1.font.bold = True
+                p1.font.size = Pt(20)
+                p1.font.color.rgb = main_color
+                
+                p2 = tf.add_paragraph()
+                p2.text = desc
+                p2.font.size = Pt(16)
+                p2.font.color.rgb = RGBColor(100, 100, 100)
+                
+                top_pos += 1.0
 
-        # Add visual suggestions at bottom (like the preview)
-        if slide_data.image_description and slide_data.layout_type != 'two_columns':
+        else: # cards layout (default)
+            cols = 2 if len(slide_data.content) <= 4 else 3
+            card_width = 5.0 if cols == 2 else 3.5
+            start_left = 1.0
+            start_top = 2.0
+            
+            valid_items = []
+            for item in slide_data.content:
+                title = item.title if hasattr(item, "title") else (item.get("title", "") if isinstance(item, dict) else str(item))
+                desc = item.description if hasattr(item, "description") else (item.get("description", "") if isinstance(item, dict) else "")
+                if title or desc:
+                    valid_items.append({"title": title, "description": desc})
+            
+            for idx, item in enumerate(valid_items):
+                row = idx // cols
+                col = idx % cols
+                
+                left = Inches(start_left + col * (card_width + 0.5))
+                top = Inches(start_top + row * 2.0)
+                
+                card = slide.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, left, top, Inches(card_width), Inches(1.8))
+                card.fill.solid()
+                card.fill.fore_color.rgb = RGBColor(250, 250, 250)
+                card.line.color.rgb = acc_color
+                card.line.width = Pt(1.5)
+                
+                tf = card.text_frame
+                tf.word_wrap = True
+                p1 = tf.paragraphs[0]
+                p1.text = item["title"]
+                p1.font.bold = True
+                p1.font.size = Pt(20)
+                p1.font.color.rgb = RGBColor(40, 40, 40)
+                
+                p2 = tf.add_paragraph()
+                p2.text = item["description"]
+                p2.font.size = Pt(16)
+                p2.font.color.rgb = RGBColor(100, 100, 100)
+
+        # Add visual suggestions at bottom
+        if slide_data.image_description and not is_two_columns and not is_title_only:
             sug_box = slide.shapes.add_textbox(Inches(0.8), Inches(6.5), Inches(11.7), Inches(0.5))
             stf = sug_box.text_frame
             stf.text = f"🎨 Visual Suggestion: {slide_data.image_description}"

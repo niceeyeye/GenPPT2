@@ -1,20 +1,28 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { FileDown, Loader2, Sparkles, XCircle, History, Trash2, Clock } from 'lucide-react';
+import { FileDown, Loader2, Sparkles, XCircle, History, Trash2, Clock, Send, Edit3, LayoutList } from 'lucide-react';
 import { Preview } from './components/Preview';
 import './App.css';
 
+interface SlideItem {
+  title: string;
+  description: string;
+}
+
 interface Slide {
   page_title: string;
-  content: string[];
+  subtitle?: string;
+  content: SlideItem[];
   layout_type: string;
   image_description?: string;
 }
 
 interface PPTContent {
   title: string;
+  subtitle?: string;
   theme_color: string;
   accent_color: string;
+  bg_style: string;
   slides: Slide[];
 }
 
@@ -41,6 +49,9 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [viewMode, setViewMode] = useState<'input' | 'outline' | 'preview'>('input');
+  const [modifyInstruction, setModifyInstruction] = useState('');
+  const [modifying, setModifying] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Load history on mount
@@ -50,7 +61,7 @@ function App() {
 
   const fetchHistory = async () => {
     try {
-      const response = await axios.get('http://127.0.0.1:8000/history');
+      const response = await axios.get('http://127.0.0.1:8001/history');
       setHistory(response.data);
     } catch (err) {
       console.error('Failed to fetch history:', err);
@@ -60,7 +71,7 @@ function App() {
   const deleteHistoryItem = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     try {
-      await axios.delete(`http://127.0.0.1:8000/history/${id}`);
+      await axios.delete(`http://127.0.0.1:8001/history/${id}`);
       setHistory(history.filter(item => item.id !== id));
     } catch (err) {
       console.error('Failed to delete history item:', err);
@@ -72,6 +83,7 @@ function App() {
     setTopic(item.title);
     setIsPolished(false);
     setShowHistory(false);
+    setViewMode('preview');
     // Scroll to preview
     setTimeout(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
@@ -80,17 +92,25 @@ function App() {
 
   const handlePolish = async () => {
     if (!topic) return;
+    console.log('--- Start Polishing ---');
+    console.log('Request URL: http://127.0.0.1:8001/polish');
+    console.log('Payload:', { topic, provider, api_key: apiKey ? '***' : 'null' });
+    
     setPolishing(true);
     setError(null);
     try {
-      const response = await axios.post('http://127.0.0.1:8000/polish', {
+      const response = await axios.post('http://127.0.0.1:8001/polish', {
         topic,
         provider,
         api_key: apiKey || null,
+      }, {
+        timeout: 30000 // 30 seconds timeout
       });
+      console.log('Polish Response:', response.data);
       setPolishedTopic(response.data.polished_topic);
       setIsPolished(true);
     } catch (err: any) {
+      console.error('Polish Error:', err);
       setError(err.response?.data?.detail || err.message || '润色主题时出错');
     } finally {
       setPolishing(false);
@@ -110,11 +130,11 @@ function App() {
     abortControllerRef.current = controller;
 
     console.log('--- Start Generation ---');
-    console.log('Request URL: http://127.0.0.1:8000/generate');
+    console.log('Request URL: http://127.0.0.1:8001/generate');
     console.log('Payload:', { topic: finalTopic, provider, api_key: apiKey ? '***' : 'null' });
 
     try {
-      const response = await axios.post<PPTContent>('http://127.0.0.1:8000/generate', {
+      const response = await axios.post<PPTContent>('http://127.0.0.1:8001/generate', {
         topic: finalTopic,
         provider,
         api_key: apiKey || null,
@@ -126,6 +146,7 @@ function App() {
       console.log('Response received:', response.data);
       if (response.data && Array.isArray(response.data.slides)) {
         setPptContent(response.data);
+        setViewMode('outline');
         fetchHistory(); // Refresh history list
       } else {
         throw new Error('返回的数据格式不正确');
@@ -159,9 +180,9 @@ function App() {
     setError(null);
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/download', pptContent);
+      const response = await axios.post('http://127.0.0.1:8001/download', pptContent);
       const filename = response.data.filename;
-      const downloadUrl = `http://127.0.0.1:8000/get-file/${filename}`;
+      const downloadUrl = `http://127.0.0.1:8001/get-file/${filename}?mode=download`;
       
       // Trigger download
       const link = document.createElement('a');
@@ -185,9 +206,9 @@ function App() {
     setError(null);
 
     try {
-      const response = await axios.post('http://127.0.0.1:8000/download-html', pptContent);
+      const response = await axios.post('http://127.0.0.1:8001/download-html', pptContent);
       const filename = response.data.filename;
-      const downloadUrl = `http://127.0.0.1:8000/get-file/${filename}`;
+      const downloadUrl = `http://127.0.0.1:8001/get-file/${filename}?mode=download`;
       
       // Trigger download
       const link = document.createElement('a');
@@ -208,14 +229,65 @@ function App() {
     if (!pptContent) return;
     setGeneratingHtml(true);
     try {
-      const response = await axios.post('http://127.0.0.1:8000/download-html', pptContent);
-      const previewUrl = `http://127.0.0.1:8000${response.data.download_url}`;
+      const response = await axios.post('http://127.0.0.1:8001/download-html', pptContent);
+      const previewUrl = `http://127.0.0.1:8001${response.data.download_url}?mode=preview`;
       window.open(previewUrl, '_blank');
     } catch (err: any) {
       setError('无法打开预览');
     } finally {
       setGeneratingHtml(false);
     }
+  };
+
+  const handleModifyOutline = async () => {
+    if (!modifyInstruction || !pptContent) return;
+    console.log('--- Start Modifying Outline ---');
+    console.log('Request URL: http://127.0.0.1:8001/modify-outline');
+    console.log('Payload size:', JSON.stringify(pptContent).length);
+
+    setModifying(true);
+    setError(null);
+    try {
+      const response = await axios.post<PPTContent>('http://127.0.0.1:8001/modify-outline', {
+        content: pptContent,
+        instruction: modifyInstruction,
+        provider,
+        api_key: apiKey || null,
+      }, {
+        timeout: 60000 // 60 seconds timeout
+      });
+      console.log('Modify Response:', response.data);
+      setPptContent(response.data);
+      setModifyInstruction('');
+      // Note: We don't fetchHistory here to avoid cluttering history with every tiny edit, 
+      // but you could add a "Save" button later.
+    } catch (err: any) {
+      console.error('Modify Error:', err);
+      setError(err.response?.data?.detail || err.message || '修改大纲时出错');
+    } finally {
+      setModifying(false);
+    }
+  };
+
+  const handleSlideTitleChange = (index: number, newTitle: string) => {
+    if (!pptContent) return;
+    const newSlides = [...pptContent.slides];
+    newSlides[index].page_title = newTitle;
+    setPptContent({ ...pptContent, slides: newSlides });
+  };
+
+  const handleSlideItemTitleChange = (slideIndex: number, itemIndex: number, newTitle: string) => {
+    if (!pptContent) return;
+    const newSlides = [...pptContent.slides];
+    newSlides[slideIndex].content[itemIndex].title = newTitle;
+    setPptContent({ ...pptContent, slides: newSlides });
+  };
+
+  const handleSlideItemDescriptionChange = (slideIndex: number, itemIndex: number, newDesc: string) => {
+    if (!pptContent) return;
+    const newSlides = [...pptContent.slides];
+    newSlides[slideIndex].content[itemIndex].description = newDesc;
+    setPptContent({ ...pptContent, slides: newSlides });
   };
 
   return (
@@ -417,52 +489,148 @@ function App() {
           </div>
         </div>
 
-        {/* Preview Section */}
+        {/* Content Section (Outline or Preview) */}
         {pptContent && (
           <div className="bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-gray-100 overflow-hidden transition-all duration-500">
+            {/* Fake Tabs for Outline / Preview */}
+            <div className="flex border-b border-gray-100 px-6 pt-4 space-x-2 bg-gray-50/50">
+              <button 
+                onClick={() => setViewMode('outline')}
+                className={`px-6 py-3 font-semibold rounded-t-xl flex items-center transition-colors ${viewMode === 'outline' ? 'bg-white text-[#E88E2E] shadow-sm border-t border-x border-gray-100' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <LayoutList className="w-4 h-4 mr-2" />
+                大纲编辑
+              </button>
+              <button 
+                onClick={() => setViewMode('preview')}
+                className={`px-6 py-3 font-semibold rounded-t-xl flex items-center transition-colors ${viewMode === 'preview' ? 'bg-white text-[#E88E2E] shadow-sm border-t border-x border-gray-100' : 'text-gray-500 hover:text-gray-700'}`}
+              >
+                <Sparkles className="w-4 h-4 mr-2" />
+                效果预览
+              </button>
+            </div>
+
             <div className="p-8">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-bold text-gray-900 flex items-center">
-                  <span className="bg-[#FFD700] w-1.5 h-6 rounded-full mr-3"></span>
-                  预览结果
-                </h2>
-                <div className="flex items-center space-x-3">
-                  <button
-                    onClick={handlePreviewHtml}
-                    disabled={generatingHtml}
-                    className="inline-flex items-center px-4 py-2.5 border border-gray-300 text-sm font-semibold rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none transition-colors"
-                    title="在新窗口打开演示"
-                  >
-                    {generatingHtml ? <Loader2 className="animate-spin h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-                    <span className="ml-2">预览网页版</span>
-                  </button>
-                  <button
-                    onClick={handleDownloadHtml}
-                    disabled={generatingHtml}
-                    className="inline-flex items-center px-4 py-2.5 border border-[#4CAF50] text-sm font-bold rounded-lg shadow-sm text-[#4CAF50] bg-white hover:bg-[#f0f9f0] focus:outline-none transition-colors"
-                  >
-                    {generatingHtml ? <Loader2 className="animate-spin h-4 w-4" /> : <FileDown className="h-4 w-4" />}
-                    <span className="ml-2">下载 HTML</span>
-                  </button>
-                  <button
-                    onClick={handleDownload}
-                    disabled={generatingFile}
-                    className="inline-flex items-center px-4 py-2.5 border border-transparent text-sm font-bold rounded-lg shadow-sm text-white bg-[#4CAF50] hover:bg-[#45a049] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#4CAF50] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {generatingFile ? <Loader2 className="animate-spin h-4 w-4" /> : <FileDown className="h-4 w-4" />}
-                    <span className="ml-2">下载 PPTX</span>
-                  </button>
+              {viewMode === 'outline' ? (
+                <div className="flex flex-col space-y-6">
+                  {/* AI Modify Input */}
+                  <div className="flex items-center space-x-3 bg-[#FFFDF8] p-4 rounded-xl border border-[#FFD700]/30 shadow-sm">
+                    <Sparkles className="w-5 h-5 text-[#E88E2E]" />
+                    <input
+                      type="text"
+                      value={modifyInstruction}
+                      onChange={(e) => setModifyInstruction(e.target.value)}
+                      placeholder="告诉 AI你想怎么修改大纲，例如：增加一页关于商业模式的内容..."
+                      className="flex-1 bg-transparent border-none focus:ring-0 text-gray-800 placeholder:text-gray-400 outline-none"
+                      onKeyDown={(e) => e.key === 'Enter' && handleModifyOutline()}
+                    />
+                    <button
+                      onClick={handleModifyOutline}
+                      disabled={!modifyInstruction || modifying}
+                      className="p-2 bg-[#FFD700] text-gray-900 rounded-lg hover:bg-[#F6C800] disabled:opacity-50 transition-colors"
+                    >
+                      {modifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                    </button>
+                  </div>
+
+                  {/* Outline Cards */}
+                  <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 pb-4">
+                    {pptContent.slides.map((slide, index) => (
+                      <div key={index} className="bg-white border border-gray-100 shadow-sm rounded-xl p-5 hover:shadow-md transition-shadow relative group">
+                        <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#E88E2E] rounded-l-xl opacity-50 group-hover:opacity-100 transition-opacity"></div>
+                        <div className="flex items-start justify-between mb-3">
+                          <div className="flex items-center flex-1">
+                            <span className="text-xs font-bold text-gray-400 bg-gray-100 px-2 py-1 rounded mr-3">
+                              第 {index + 1} 页
+                            </span>
+                            <input
+                              type="text"
+                              value={slide.page_title}
+                              onChange={(e) => handleSlideTitleChange(index, e.target.value)}
+                              className="text-lg font-bold text-gray-800 border-b-2 border-transparent hover:border-gray-200 focus:border-[#E88E2E] focus:outline-none bg-transparent w-full transition-all"
+                            />
+                          </div>
+                        </div>
+                        <div className="pl-12 space-y-4">
+                          {slide.content.map((c, cIdx) => (
+                            <div key={cIdx} className="flex flex-col space-y-1">
+                              <div className="flex items-center">
+                                <span className="text-gray-400 mr-2 text-xs">•</span>
+                                <input
+                                  type="text"
+                                  value={c.title}
+                                  onChange={(e) => handleSlideItemTitleChange(index, cIdx, e.target.value)}
+                                  className="text-sm font-semibold text-gray-700 border-b border-transparent hover:border-gray-100 focus:border-[#FFD700] focus:outline-none bg-transparent w-full transition-colors"
+                                />
+                              </div>
+                              <textarea
+                                value={c.description}
+                                onChange={(e) => handleSlideItemDescriptionChange(index, cIdx, e.target.value)}
+                                rows={2}
+                                className="text-sm text-gray-500 pl-3 border-none hover:bg-gray-50 focus:bg-gray-50 focus:ring-0 focus:outline-none bg-transparent w-full resize-none rounded transition-colors"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="flex justify-end pt-4 border-t border-gray-100">
+                    <button
+                      onClick={() => setViewMode('preview')}
+                      className="inline-flex items-center px-8 py-3 border border-transparent text-base font-bold rounded-lg shadow-sm text-gray-900 bg-[#FFD700] hover:bg-[#F6C800] focus:outline-none transition-all transform hover:scale-105"
+                    >
+                      完成修改，生成 PPT
+                    </button>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="w-full bg-gray-50 p-2 rounded-xl border border-gray-100" key={JSON.stringify(pptContent.slides)}>
-                 <Preview 
-                  slides={pptContent.slides} 
-                  title={pptContent.title} 
-                  themeColor={pptContent.theme_color}
-                  accentColor={pptContent.accent_color}
-                 />
-              </div>
+              ) : (
+                <>
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-2xl font-bold text-gray-900 flex items-center">
+                      <span className="bg-[#FFD700] w-1.5 h-6 rounded-full mr-3"></span>
+                      最终效果预览
+                    </h2>
+                    <div className="flex items-center space-x-3">
+                      <button
+                        onClick={handlePreviewHtml}
+                        disabled={generatingHtml}
+                        className="inline-flex items-center px-4 py-2.5 border border-gray-300 text-sm font-semibold rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none transition-colors"
+                        title="在新窗口打开演示"
+                      >
+                        {generatingHtml ? <Loader2 className="animate-spin h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+                        <span className="ml-2">网页全屏播放</span>
+                      </button>
+                      <button
+                        onClick={handleDownloadHtml}
+                        disabled={generatingHtml}
+                        className="inline-flex items-center px-4 py-2.5 border border-[#4CAF50] text-sm font-bold rounded-lg shadow-sm text-[#4CAF50] bg-white hover:bg-[#f0f9f0] focus:outline-none transition-colors"
+                      >
+                        {generatingHtml ? <Loader2 className="animate-spin h-4 w-4" /> : <FileDown className="h-4 w-4" />}
+                        <span className="ml-2">下载 HTML</span>
+                      </button>
+                      <button
+                        onClick={handleDownload}
+                        disabled={generatingFile}
+                        className="inline-flex items-center px-4 py-2.5 border border-transparent text-sm font-bold rounded-lg shadow-sm text-white bg-[#4CAF50] hover:bg-[#45a049] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[#4CAF50] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {generatingFile ? <Loader2 className="animate-spin h-4 w-4" /> : <FileDown className="h-4 w-4" />}
+                        <span className="ml-2">下载 PPTX</span>
+                      </button>
+                    </div>
+                  </div>
+                  
+                  <div className="w-full bg-gray-50 p-2 rounded-xl border border-gray-100" key={JSON.stringify(pptContent.slides)}>
+                     <Preview 
+                      slides={pptContent.slides} 
+                      title={pptContent.title} 
+                      themeColor={pptContent.theme_color}
+                      accentColor={pptContent.accent_color}
+                     />
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
