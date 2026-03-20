@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Body, Request
+from fastapi import FastAPI, HTTPException, Body, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -6,12 +6,14 @@ from typing import Optional, List, Any
 import os
 import uuid
 import time
+import shutil
 
 from .schemas import PPTContent, ModifyOutlineRequest
 from .services.llm import generate_ppt_content, polish_topic, modify_ppt_content
 from .services.ppt import create_pptx
 from .services.html_export import create_html_presentation
 from .services.history import add_history_item, get_all_history, delete_history_item
+from .services.stt import save_and_transcribe
 
 app = FastAPI(title="GenPPT API")
 
@@ -72,15 +74,22 @@ async def polish(request: TopicRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/modify-outline")
+@app.post("/modify-outline", response_model=PPTContent)
 async def modify_outline(request: ModifyOutlineRequest):
     try:
+        print(f"--- Modifying Outline ---")
+        print(f"Instruction: {request.instruction}")
+        print(f"Slides before: {len(request.content.slides)}")
+        
         updated_content_dict = modify_ppt_content(
             current_content=request.content.dict(),
             instruction=request.instruction,
             provider=request.provider,
             api_key=request.api_key
         )
+        
+        print(f"Slides after: {len(updated_content_dict.get('slides', []))}")
+        
         # Ensure we return a valid PPTContent object to avoid validation errors
         return PPTContent(**updated_content_dict)
     except Exception as e:
@@ -88,6 +97,29 @@ async def modify_outline(request: ModifyOutlineRequest):
         print("Error in /modify-outline:")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stt")
+async def speech_to_text(file: UploadFile = File(...)):
+    """
+    Endpoint to receive an audio file and return transcribed text.
+    """
+    print(f"--- STT Request: Received file {file.filename} ---")
+    try:
+        # Get the file extension
+        extension = file.filename.split(".")[-1] if "." in file.filename else "wav"
+        
+        # Read the audio bytes
+        audio_bytes = await file.read()
+        
+        # Save and transcribe
+        text = save_and_transcribe(audio_bytes, extension)
+        
+        print(f"Transcribed Text: {text}")
+        return {"text": text}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Speech to text failed: {str(e)}")
 
 @app.get("/history")
 async def get_history():

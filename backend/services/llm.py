@@ -288,11 +288,17 @@ def modify_ppt_content(current_content: dict, instruction: str, provider: str = 
     
     用户的修改指令是："{instruction}"
     
-    请严格按照用户的指令修改上述 JSON 数据。你可以增加、删除、修改 slides，或者调整主题颜色、布局等。
-    请保持原有的 JSON 结构完全不变（必须包含 title, subtitle, theme_color, accent_color, bg_style, slides 等字段）。
-    如果用户要求增加一页，请确保新页面的结构和原有页面一致（包含 page_title, subtitle, layout_type, content 数组）。
-    
-    严禁输出任何 Markdown 格式的包裹（如 ```json ），只能输出纯合法的 JSON 字符串。
+    ### 任务说明：
+    请根据用户的指令，对上述 JSON 数据进行**精准修改**：
+    1. **删除操作**：如果用户要求删除某页（如“删掉第一页”），请从 `slides` 数组中移除该元素。
+    2. **增加操作**：如果用户要求增加内容，请设计符合整体风格的新页面并插入 `slides`。
+    3. **修改操作**：如果用户要求修改某个点或标题，请直接更新对应的字段。
+    4. **全局调整**：如果用户要求更改主题色、背景风格等，请修改 `theme_color`, `accent_color` 或 `bg_style`。
+
+    ### 约束条件：
+    - 保持 JSON 结构的完整性和合法性。
+    - 严禁在 JSON 中包含注释。
+    - 只返回修改后的完整 JSON 对象，严禁包含任何 Markdown 代码块标签（如 ```json ）或多余的解释文字。
     """
 
     try:

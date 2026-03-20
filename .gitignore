@@ -23,6 +23,9 @@ dist-ssr/
 # Project specific
 backend/generated_ppts/
 backend/history.json
+backend/model_cache/
+SenseVoiceSmall/
+temp_audio/
 *.pptx
 *.html
 

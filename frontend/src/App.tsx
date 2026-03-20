@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { FileDown, Loader2, Sparkles, XCircle, History, Trash2, Clock, Send, Edit3, LayoutList } from 'lucide-react';
+import { FileDown, Loader2, Sparkles, XCircle, History, Trash2, Clock, Send, LayoutList, Mic, MicOff } from 'lucide-react';
 import { Preview } from './components/Preview';
 import './App.css';
 
@@ -52,7 +52,75 @@ function App() {
   const [viewMode, setViewMode] = useState<'input' | 'outline' | 'preview'>('input');
   const [modifyInstruction, setModifyInstruction] = useState('');
   const [modifying, setModifying] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [sttLoading, setSttLoading] = useState(false);
+  const [recordingTarget, setRecordingTarget] = useState<'topic' | 'instruction' | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const startRecording = async (target: 'topic' | 'instruction') => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        await handleVoiceToText(audioBlob, target);
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTarget(target);
+    } catch (err) {
+      console.error('Failed to start recording:', err);
+      setError('无法访问麦克风，请检查权限。');
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      setRecordingTarget(null);
+    }
+  };
+
+  const handleVoiceToText = async (audioBlob: Blob, target: 'topic' | 'instruction') => {
+    const formData = new FormData();
+    formData.append('file', audioBlob, 'recording.wav');
+
+    try {
+      setSttLoading(true);
+      const response = await axios.post('http://127.0.0.1:8001/stt', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      
+      const text = response.data.text;
+      if (text) {
+        if (target === 'topic') {
+          setTopic(prev => prev ? `${prev} ${text}` : text);
+        } else {
+          setModifyInstruction(prev => prev ? `${prev} ${text}` : text);
+        }
+      }
+    } catch (err: any) {
+      console.error('STT Error:', err);
+      setError('语音转文字失败，请稍后重试。');
+    } finally {
+      setSttLoading(false);
+    }
+  };
 
   // Load history on mount
   useEffect(() => {
@@ -240,8 +308,11 @@ function App() {
   };
 
   const handleModifyOutline = async () => {
-    if (!modifyInstruction || !pptContent) return;
+    const trimmedInstruction = modifyInstruction.trim().replace(/^[.。\s]+/, '');
+    if (!trimmedInstruction || !pptContent) return;
+    
     console.log('--- Start Modifying Outline ---');
+    console.log('Instruction:', trimmedInstruction);
     console.log('Request URL: http://127.0.0.1:8001/modify-outline');
     console.log('Payload size:', JSON.stringify(pptContent).length);
 
@@ -250,7 +321,7 @@ function App() {
     try {
       const response = await axios.post<PPTContent>('http://127.0.0.1:8001/modify-outline', {
         content: pptContent,
-        instruction: modifyInstruction,
+        instruction: trimmedInstruction,
         provider,
         api_key: apiKey || null,
       }, {
@@ -389,6 +460,12 @@ function App() {
             
             {!isPolished ? (
               <div className="relative">
+                {sttLoading && recordingTarget === 'topic' && (
+                  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-10 bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-xs font-bold animate-pulse flex items-center shadow-sm">
+                    <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                    正在识别语音...
+                  </div>
+                )}
                 <textarea
                   rows={5}
                   value={topic}
@@ -396,6 +473,18 @@ function App() {
                   className="block w-full rounded-xl border-0 py-4 px-5 text-gray-900 bg-gray-50 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-[#FFD700] text-lg resize-none outline-none transition-shadow"
                   placeholder="例如：生成一份关于 AI 发展史的演讲 PPT"
                 />
+                <div className="absolute bottom-4 left-4">
+                  <button
+                    onMouseDown={() => startRecording('topic')}
+                    onMouseUp={stopRecording}
+                    onTouchStart={() => startRecording('topic')}
+                    onTouchEnd={stopRecording}
+                    className={`p-3 rounded-full transition-all ${isRecording && recordingTarget === 'topic' ? 'bg-red-500 text-white animate-pulse' : 'bg-white text-gray-400 hover:text-[#E88E2E] border border-gray-100 shadow-sm'}`}
+                    title="按住说话"
+                  >
+                    {isRecording && recordingTarget === 'topic' ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                  </button>
+                </div>
                 <div className="absolute bottom-4 right-4 flex space-x-3">
                   <button
                     onClick={handlePolish}
@@ -514,23 +603,41 @@ function App() {
               {viewMode === 'outline' ? (
                 <div className="flex flex-col space-y-6">
                   {/* AI Modify Input */}
-                  <div className="flex items-center space-x-3 bg-[#FFFDF8] p-4 rounded-xl border border-[#FFD700]/30 shadow-sm">
-                    <Sparkles className="w-5 h-5 text-[#E88E2E]" />
-                    <input
-                      type="text"
-                      value={modifyInstruction}
-                      onChange={(e) => setModifyInstruction(e.target.value)}
-                      placeholder="告诉 AI你想怎么修改大纲，例如：增加一页关于商业模式的内容..."
-                      className="flex-1 bg-transparent border-none focus:ring-0 text-gray-800 placeholder:text-gray-400 outline-none"
-                      onKeyDown={(e) => e.key === 'Enter' && handleModifyOutline()}
-                    />
-                    <button
-                      onClick={handleModifyOutline}
-                      disabled={!modifyInstruction || modifying}
-                      className="p-2 bg-[#FFD700] text-gray-900 rounded-lg hover:bg-[#F6C800] disabled:opacity-50 transition-colors"
-                    >
-                      {modifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                    </button>
+                  <div className="relative">
+                    {sttLoading && recordingTarget === 'instruction' && (
+                      <div className="absolute -top-8 left-1/2 -translate-x-1/2 z-10 bg-orange-100 text-orange-600 px-3 py-1 rounded-full text-xs font-bold animate-pulse flex items-center shadow-sm border border-orange-200">
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                        正在识别语音...
+                      </div>
+                    )}
+                    <div className="flex items-center space-x-3 bg-[#FFFDF8] p-4 rounded-xl border border-[#FFD700]/30 shadow-sm">
+                      <Sparkles className="w-5 h-5 text-[#E88E2E]" />
+                      <input
+                        type="text"
+                        value={modifyInstruction}
+                        onChange={(e) => setModifyInstruction(e.target.value)}
+                        placeholder="告诉 AI你想怎么修改大纲，例如：增加一页关于商业模式的内容..."
+                        className="flex-1 bg-transparent border-none focus:ring-0 text-gray-800 placeholder:text-gray-400 outline-none"
+                        onKeyDown={(e) => e.key === 'Enter' && handleModifyOutline()}
+                      />
+                      <button
+                        onMouseDown={() => startRecording('instruction')}
+                        onMouseUp={stopRecording}
+                        onTouchStart={() => startRecording('instruction')}
+                        onTouchEnd={stopRecording}
+                        className={`p-2 rounded-lg transition-all ${isRecording && recordingTarget === 'instruction' ? 'bg-red-500 text-white animate-pulse' : 'text-gray-400 hover:text-[#E88E2E]'}`}
+                        title="按住说话"
+                      >
+                        {isRecording && recordingTarget === 'instruction' ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                      </button>
+                      <button
+                        onClick={handleModifyOutline}
+                        disabled={!modifyInstruction || modifying}
+                        className="p-2 bg-[#FFD700] text-gray-900 rounded-lg hover:bg-[#F6C800] disabled:opacity-50 transition-colors"
+                      >
+                        {modifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                      </button>
+                    </div>
                   </div>
 
                   {/* Outline Cards */}
@@ -576,12 +683,25 @@ function App() {
                     ))}
                   </div>
                   
-                  <div className="flex justify-end pt-4 border-t border-gray-100">
+                  <div className="flex justify-end pt-4 border-t border-gray-100 space-x-4">
                     <button
                       onClick={() => setViewMode('preview')}
+                      className="inline-flex items-center px-8 py-3 border border-gray-300 text-base font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 focus:outline-none transition-all"
+                    >
+                      完成修改
+                    </button>
+                    <button
+                      onClick={() => {
+                        // If there is an instruction in the box, apply it first
+                        if (modifyInstruction.trim().replace(/^[.。\s]+/, '')) {
+                          handleModifyOutline().then(() => setViewMode('preview'));
+                        } else {
+                          setViewMode('preview');
+                        }
+                      }}
                       className="inline-flex items-center px-8 py-3 border border-transparent text-base font-bold rounded-lg shadow-sm text-gray-900 bg-[#FFD700] hover:bg-[#F6C800] focus:outline-none transition-all transform hover:scale-105"
                     >
-                      完成修改，生成 PPT
+                      生成最终 PPT
                     </button>
                   </div>
                 </div>
